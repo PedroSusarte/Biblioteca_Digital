@@ -1,0 +1,126 @@
+CREATE DATABASE biblioteca_digital;
+USE biblioteca_digital;
+
+CREATE TABLE grupos_usuarios (
+    id_grupo VARCHAR(20) PRIMARY KEY,
+    nome_grupo VARCHAR(50) NOT NULL,
+    descricao VARCHAR(255)
+);
+
+CREATE TABLE usuarios (
+    id_usuario VARCHAR(20) PRIMARY KEY,
+    nome VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    senha VARCHAR(100) NOT NULL,
+    id_grupo VARCHAR(20),
+    FOREIGN KEY (id_grupo) REFERENCES grupos_usuarios(id_grupo)
+);
+
+CREATE TABLE livros (
+    id_livro VARCHAR(20) PRIMARY KEY,
+    titulo VARCHAR(150) NOT NULL,
+    autor VARCHAR(100),
+    ano_publicacao INT,
+    disponivel BOOLEAN DEFAULT TRUE
+);
+
+CREATE TABLE alugueis (
+    id_aluguel VARCHAR(20) PRIMARY KEY,
+    id_usuario VARCHAR(20),
+    id_livro VARCHAR(20),
+    data_aluguel DATE NOT NULL,
+    data_devolucao DATE,
+    status VARCHAR(20) DEFAULT 'ativo',
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario),
+    FOREIGN KEY (id_livro) REFERENCES livros(id_livro)
+);
+
+DELIMITER //
+CREATE FUNCTION gerar_id(prefixo VARCHAR(5)) RETURNS VARCHAR(20)
+DETERMINISTIC
+BEGIN
+    RETURN CONCAT(prefixo, '_', DATE_FORMAT(NOW(), '%Y%m%d%H%i%s'));
+END;
+//
+DELIMITER ;
+
+
+DELIMITER //
+CREATE PROCEDURE registrar_aluguel(
+    IN p_id_usuario VARCHAR(20),
+    IN p_id_livro VARCHAR(20),
+    IN p_data_devolucao DATE
+)
+BEGIN
+    DECLARE novo_id VARCHAR(20);
+    SET novo_id = gerar_id('ALU');
+    
+    INSERT INTO alugueis (id_aluguel, id_usuario, id_livro, data_aluguel, data_devolucao, status)
+    VALUES (novo_id, p_id_usuario, p_id_livro, CURDATE(), p_data_devolucao, 'ativo');
+    
+    -- Atualiza o livro como indisponível
+    UPDATE livros SET disponivel = FALSE WHERE id_livro = p_id_livro;
+END;
+//
+DELIMITER ;
+
+DELIMITER //
+
+CREATE TRIGGER trg_devolucao
+AFTER UPDATE ON alugueis
+FOR EACH ROW
+BEGIN
+    IF NEW.status = 'devolvido' THEN
+        UPDATE livros 
+        SET disponivel = TRUE 
+        WHERE id_livro = NEW.id_livro;
+    END IF;
+END;
+//
+DELIMITER ;
+
+
+DELIMITER //
+CREATE TRIGGER trg_verifica_disponibilidade BEFORE INSERT ON alugueis
+FOR EACH ROW
+BEGIN
+    DECLARE status_livro BOOLEAN;
+    SELECT disponivel INTO status_livro FROM livros WHERE id_livro = NEW.id_livro;
+    IF status_livro = FALSE THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Livro não disponível para aluguel.';
+    END IF;
+END;
+//
+DELIMITER ;
+
+CREATE VIEW vw_livros_disponiveis AS
+SELECT id_livro, titulo, autor, ano_publicacao
+FROM livros
+WHERE disponivel = TRUE;
+
+CREATE VIEW vw_alugueis_detalhes AS
+SELECT a.id_aluguel, u.nome AS usuario, l.titulo AS livro, a.data_aluguel, a.data_devolucao, a.status
+FROM alugueis a
+JOIN usuarios u ON a.id_usuario = u.id_usuario
+JOIN livros l ON a.id_livro = l.id_livro;
+
+CREATE INDEX idx_titulo ON livros (titulo);
+CREATE INDEX idx_usuario_email ON usuarios (email);
+
+CREATE USER 'admin_biblio'@'%' IDENTIFIED BY 'admin123';
+CREATE USER 'cliente_biblio'@'%' IDENTIFIED BY 'cliente123';
+
+GRANT ALL PRIVILEGES ON biblioteca_digital.* TO 'admin_biblio'@'%';
+GRANT SELECT, INSERT, UPDATE ON biblioteca_digital.* TO 'cliente_biblio'@'%';
+
+FLUSH PRIVILEGES;
+
+INSERT INTO grupos_usuarios VALUES ('GRP_ADMIN', 'admin', 'Administrador do sistema');
+INSERT INTO grupos_usuarios VALUES ('GRP_CLIENTE', 'cliente', 'Usuário comum');
+
+INSERT INTO usuarios VALUES ('USR_001', 'Pedro Souza', 'pedro@email.com', '123456', 'GRP_CLIENTE');
+INSERT INTO usuarios VALUES ('USR_002', 'Administrador', 'admin@email.com', 'admin123', 'GRP_ADMIN');
+
+INSERT INTO livros VALUES ('LIV_001', 'Dom Casmurro', 'Machado de Assis', 1899, TRUE);
+INSERT INTO livros VALUES ('LIV_002', 'O Alienista', 'Machado de Assis', 1882, TRUE);
+INSERT INTO livros VALUES ('LIV_003', '1984', 'George Orwell', 1949, TRUE);
